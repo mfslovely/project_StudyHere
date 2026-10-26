@@ -219,3 +219,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Generated vector databases
+vector_db/
+chapters_vector_db/
