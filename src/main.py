@@ -9,9 +9,16 @@ from course_utility import (
     get_course_coach_response,
     initialise_database,
     list_courses,
+    normalise_user_id,
     regenerate_course_cheatsheets,
     set_item_completed,
     set_project_completed,
+)
+from chat_history import (
+    list_conversations,
+    load_messages,
+    mongo_history_enabled,
+    save_message,
 )
 from get_yt_video import search_youtube_videos
 from biology_utility import available_biology_chapters, get_biology_response
@@ -97,7 +104,7 @@ def show_video_results(videos):
         )
 
 
-def course_chat(course):
+def course_chat(course, user_name):
     st.markdown('<div class="eyebrow">AI course coach</div>', unsafe_allow_html=True)
     if not course:
         st.markdown("## Build your own course")
@@ -127,8 +134,13 @@ def course_chat(course):
         if next_items:
             st.caption(f"Recommended next: {next_items[0]['title']}")
 
+    user_id = normalise_user_id(user_name)
+    conversation_id = f"course-{course['id']}"
     all_messages = st.session_state.setdefault("course_messages", {})
-    messages = all_messages.setdefault(str(course["id"]), [])
+    cache_key = f"{user_id}:{conversation_id}"
+    if cache_key not in all_messages:
+        all_messages[cache_key] = load_messages(user_id, conversation_id)
+    messages = all_messages[cache_key]
     for message in messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -140,7 +152,16 @@ def course_chat(course):
     if not prompt:
         return
 
-    messages.append({"role": "user", "content": prompt})
+    user_message = {"role": "user", "content": prompt}
+    messages.append(user_message)
+    save_message(
+        user_id,
+        conversation_id,
+        course["title"],
+        "course",
+        user_message,
+        course_id=course["id"],
+    )
     with st.chat_message("user"):
         st.markdown(prompt)
     with st.chat_message("assistant"):
@@ -156,9 +177,17 @@ def course_chat(course):
             answer = f"I couldn't answer right now: {error}"
             st.error(answer)
     messages.append({"role": "assistant", "content": answer})
+    save_message(
+        user_id,
+        conversation_id,
+        course["title"],
+        "course",
+        {"role": "assistant", "content": answer},
+        course_id=course["id"],
+    )
 
 
-def biology_library():
+def biology_library(user_name):
     st.markdown('<div class="eyebrow">Class 12 textbook library</div>', unsafe_allow_html=True)
     st.markdown("## Biology study assistant")
     chapters = available_chapters()
@@ -182,7 +211,16 @@ def biology_library():
         "Complete textbook": "complete",
     }[mode_label]
 
-    messages = st.session_state.setdefault("biology_messages", [])
+    user_id = normalise_user_id(user_name)
+    conversation_id = "biology-class-12"
+    biology_messages = st.session_state.setdefault("biology_messages", {})
+    if not isinstance(biology_messages, dict):
+        biology_messages = {}
+        st.session_state.biology_messages = biology_messages
+    cache_key = f"{user_id}:{conversation_id}"
+    if cache_key not in biology_messages:
+        biology_messages[cache_key] = load_messages(user_id, conversation_id)
+    messages = biology_messages[cache_key]
     for message in messages:
         with st.chat_message(message["role"]):
             if message.get("scope_notice"):
@@ -195,7 +233,15 @@ def biology_library():
     if not question:
         return
     history = langchain_history(messages)
-    messages.append({"role": "user", "content": question})
+    user_message = {"role": "user", "content": question}
+    messages.append(user_message)
+    save_message(
+        user_id,
+        conversation_id,
+        "Class 12 Biology",
+        "biology",
+        user_message,
+    )
     with st.chat_message("user"):
         st.markdown(question)
     with st.chat_message("assistant"):
@@ -233,6 +279,13 @@ def biology_library():
             }
             st.error(assistant_message["content"])
     messages.append(assistant_message)
+    save_message(
+        user_id,
+        conversation_id,
+        "Class 12 Biology",
+        "biology",
+        assistant_message,
+    )
 
 
 def render_course_items(course, user_name):
@@ -279,6 +332,30 @@ def course_tracker(user_name):
             st.rerun()
         except Exception as error:
             st.error(f"Course could not be created: {error}")
+
+    st.markdown('<div class="resource-label">Saved chats</div>', unsafe_allow_html=True)
+    if mongo_history_enabled():
+        conversations = list_conversations(normalise_user_id(user_name))
+        if conversations:
+            for conversation in conversations:
+                if st.button(
+                    conversation.get("title", "Untitled chat"),
+                    key=f"saved_chat_{conversation['conversation_id']}",
+                    help=conversation.get("preview") or "Open saved conversation",
+                    use_container_width=True,
+                ):
+                    if conversation.get("kind") == "biology":
+                        st.session_state.workspace_mode = "Biology Textbook"
+                    else:
+                        course_id = conversation.get("course_id")
+                        if course_id is not None:
+                            st.session_state.active_course_id = int(course_id)
+                        st.session_state.workspace_mode = "AI Course Coach"
+                    st.rerun()
+        else:
+            st.caption("Your conversations will appear here after the first message.")
+    else:
+        st.caption("Add MONGODB_URI on Render to save chat history permanently.")
 
     courses = list_courses(user_name)
     if not courses:
@@ -357,9 +434,10 @@ def main():
         st.caption("Turn any topic into a guided course, measurable progress, and a real project.")
     with header_right:
         user_name = st.text_input(
-            "Learner profile",
+            "Learner ID",
             value=st.session_state.get("learner_name", "Learner"),
-            placeholder="Your name",
+            placeholder="e.g. lovely-gupta",
+            help="Use the same unique ID to reopen your courses and saved chats.",
         )
         st.session_state.learner_name = user_name or "Learner"
 
@@ -380,7 +458,7 @@ def main():
             label_visibility="collapsed",
         )
         if mode == "Biology Textbook":
-            biology_library()
+            biology_library(st.session_state.learner_name)
         else:
             active_id = st.session_state.get("active_course_id")
             course = (
@@ -388,7 +466,7 @@ def main():
                 if active_id
                 else active_course
             )
-            course_chat(course)
+            course_chat(course, st.session_state.learner_name)
 
 
 if __name__ == "__main__":
