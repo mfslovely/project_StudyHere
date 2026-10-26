@@ -13,10 +13,10 @@ from course_utility import (
     set_project_completed,
 )
 from get_yt_video import search_youtube_videos
+from biology_utility import available_biology_chapters, get_biology_response
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CHAPTERS_VECTOR_DB_DIR = PROJECT_ROOT / "chapters_vector_db"
 
 st.set_page_config(
     page_title="Learn.ai — Personal AI Learning Paths",
@@ -56,14 +56,7 @@ def inject_styles():
 
 @st.cache_data
 def available_chapters():
-    if not CHAPTERS_VECTOR_DB_DIR.is_dir():
-        return []
-    chapters = [
-        path.name
-        for path in CHAPTERS_VECTOR_DB_DIR.iterdir()
-        if path.is_dir() and path.name.partition(".")[0].isdigit()
-    ]
-    return sorted(chapters, key=lambda name: int(name.partition(".")[0]))
+    return available_biology_chapters()
 
 
 def langchain_history(messages):
@@ -172,8 +165,6 @@ def biology_library():
         st.warning("Biology chapter indexes are not available on this deployment yet.")
         return
 
-    from chatbot_utility import get_chatbot_response
-
     selected = st.multiselect(
         "Choose one or more chapters",
         chapters,
@@ -209,7 +200,7 @@ def biology_library():
     with st.chat_message("assistant"):
         try:
             with st.spinner("Searching the textbook…"):
-                response = get_chatbot_response(
+                response = get_biology_response(
                     question,
                     chat_history=history,
                     selected_chapters=selected,
@@ -279,9 +270,10 @@ def course_tracker(user_name):
         create_clicked = st.form_submit_button("✦ Build with AI", use_container_width=True)
     if create_clicked:
         try:
-            with st.spinner("Collecting videos, blogs and building your project…"):
+            with st.spinner("Building your course with videos, blogs and cheat sheets…"):
                 created = create_course(user_name, topic)
             st.session_state.active_course_id = created["id"]
+            st.session_state.workspace_mode = "AI Course Coach"
             st.success("Course created")
             st.rerun()
         except Exception as error:
@@ -306,6 +298,7 @@ def course_tracker(user_name):
             use_container_width=True,
         ):
             st.session_state.active_course_id = course["id"]
+            st.session_state.workspace_mode = "AI Course Coach"
             st.rerun()
 
     course = get_course(active_id, user_name)
@@ -364,10 +357,12 @@ def main():
             active_course = course_tracker(st.session_state.learner_name)
 
     with content_column:
+        if "workspace_mode" not in st.session_state:
+            st.session_state.workspace_mode = "AI Course Coach"
         mode = st.segmented_control(
             "Workspace",
             ["AI Course Coach", "Biology Textbook"],
-            default="AI Course Coach",
+            key="workspace_mode",
             label_visibility="collapsed",
         )
         if mode == "Biology Textbook":
