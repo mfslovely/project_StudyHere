@@ -1,156 +1,92 @@
-# Study Here
+# Learn.ai
 
-Study Here is a retrieval-augmented learning assistant for Class 12 students. It answers questions from locally indexed textbook PDFs, shows the textbook pages used for each answer, and automatically recommends relevant YouTube lessons.
+Learn.ai turns any topic into a personalized mini-course. A learner enters a topic such as Docker, Genetics, or Financial Modelling, and the application assembles video lessons, useful articles, AI-generated cheat sheets, measurable progress, and a practical capstone project.
 
-The current knowledge base contains all 13 Class 12 Biology chapters. Physics, Chemistry, and Mathematics are present in the subject selector and can be enabled after their PDFs and vector databases are added.
+The original Class 12 Biology textbook assistant remains available as a separate workspace.
 
-## Features
+## Product experience
 
-- Subject and chapter selection from a Streamlit interface
-- Textbook-grounded answers instead of unrestricted generated responses
-- Dedicated chapter retrieval for accurate requests such as "teach me Chapter 6"
-- Multi-chapter selection for comparisons and combined questions
-- Page-level textbook source references
-- Automatic YouTube video references after textbook explanations
-- Generic handling for greetings without unnecessary textbook retrieval
-- Persistent combined-book and chapter-level Chroma vector databases
-- Local Hugging Face embeddings with Groq-hosted answer generation
+- **AI course builder:** creates a structured path for any learner-supplied topic.
+- **Real learning resources:** collects four YouTube lessons and three blog/tutorial links.
+- **Topic-specific cheat sheets:** generates three concise references with commands, formulas, definitions, or recall cues.
+- **Right-side course tracker:** courses appear as independent panels, similar to a chat list, without requiring the learner to scroll through old messages.
+- **Live progress:** every completed resource updates the “You've learned 50% / 70% / 100%” indicator.
+- **Capstone project:** unlocks after the learning resources reach 100%.
+- **AI project mentor:** helps plan, implement, debug, review, and finish the unlocked project.
+- **Per-learner persistence:** courses and completion states are stored by learner profile in SQLite locally or PostgreSQL on Render.
+- **Biology library:** preserves textbook-grounded Class 12 Biology answers, PDF page sources, automatic chapter switching, and video references.
 
-## Application Preview
-
-### Select a subject and chapter
-
-Choose a Class 12 subject and one or more available chapters. When no chapter is selected, the application searches the complete subject textbook.
-
-![Study Here subject and chapter selection](docs/images/study-here-subject-and-chapter-selection.png)
-
-### Ask textbook questions
-
-The assistant retrieves relevant pages from the selected chapter and produces a structured, student-friendly explanation.
-
-![Study Here textbook-grounded answer](docs/images/study-here-textbook-answer.png)
-
-### Review source pages and video references
-
-Each grounded answer includes collapsible textbook sources. Relevant YouTube lessons are searched automatically and displayed as compact reference cards.
-
-![Study Here video references](docs/images/study-here-video-references.png)
-
-### Request concise explanations
-
-Follow-up questions use the selected chapter and conversation history, allowing students to request shorter explanations or clarification.
-
-![Study Here concise explanation](docs/images/study-here-concise-explanation.png)
-
-### Open recommended lessons
-
-Every video card includes the title, channel, duration, and a direct YouTube link.
-
-![Study Here video reference cards](docs/images/study-here-video-reference-cards.png)
-
-## Architecture
+## Interface architecture
 
 ```mermaid
-flowchart TD
-    U[Student] --> UI[Streamlit interface<br/>src/main.py]
-    UI --> R{Request router}
+flowchart LR
+    U[Learner] --> UI[Learn.ai Streamlit UI]
+    UI --> C[AI Course Coach]
+    UI --> T[Right-side Course Tracker]
+    UI --> B[Biology Textbook Library]
 
-    R -->|Greeting| G[Generic greeting<br/>No retrieval]
-    R -->|Textbook question| C[Chatbot utility<br/>src/chatbot_utility.py]
-    R -->|Video request| Y[YouTube search<br/>src/get_yt_video.py]
+    T --> G[Course Generator]
+    G --> Y[YouTube Lessons]
+    G --> W[Blogs and Guides]
+    G --> S[AI Cheat Sheets]
+    G --> P[Capstone Project]
 
-    C --> S{Chapter selected?}
-    S -->|Yes| CD[(Chapter Chroma DB)]
-    S -->|No| BD[(Combined book Chroma DB)]
-    CD --> E[Hugging Face embeddings]
-    BD --> E
-    E --> D[Relevant textbook chunks]
-    D --> L[Groq chat model]
-    L --> A[Grounded answer + source metadata]
-    A --> UI
-
-    A --> Y
-    Y --> V[YouTube reference cards]
-    V --> UI
+    T --> DB[(SQLite / Render PostgreSQL)]
+    C --> L[Groq LLM]
+    C --> DB
+    B --> V[(Chapter Chroma DB)]
+    B --> L
 ```
 
-### Component responsibilities
+## Course lifecycle
 
-| Component | Responsibility |
-| --- | --- |
-| `src/main.py` | Streamlit interface, subject/chapter selection, chat history, sources, and video cards |
-| `src/chatbot_utility.py` | Greeting detection, chapter routing, Chroma retrieval, prompt construction, and Groq responses |
-| `src/get_yt_video.py` | YouTube intent detection and related lesson search |
-| `src/vectorize_book.py` | PDF loading, text splitting, embeddings, and Chroma persistence |
-| `src/vectorize_script.py` | Command-line entry point for configuration checks and vectorization |
-| `data_original/` | Source textbook PDFs organized by class and subject |
-| `vector_db/` | Generated combined-subject vector database |
-| `chapters_vector_db/` | Generated per-chapter vector databases |
+1. Enter a learner profile name.
+2. Type any topic in **Create a course**.
+3. Learn.ai collects videos and articles and generates cheat sheets.
+4. Mark each resource complete from the independent tracker panel.
+5. Watch the learning percentage update automatically.
+6. Reach 100% to unlock a topic-specific portfolio project.
+7. Ask the AI Course Coach for project planning, code, debugging, or feedback.
 
-## Project Structure
+## Project structure
 
 ```text
 project_StudyHere/
-├── data_original/
-│   └── class_12/
-│       └── biology/
-│           ├── 1. Sexual Reproduction in Flowering Plants.pdf
-│           ├── ...
-│           └── 13. Biodiversity and Conservation.pdf
-├── docs/
-│   └── images/
 ├── src/
-│   ├── .env
-│   ├── chatbot_utility.py
-│   ├── env_tamplate.txt
-│   ├── get_yt_video.py
-│   ├── main.py
-│   ├── vectorize_book.py
-│   └── vectorize_script.py
-├── chapters_vector_db/        # Generated and Git-ignored
-├── vector_db/                 # Generated and Git-ignored
-├── .gitignore
-├── README.md
-└── requirements.txt
+│   ├── main.py                # Learn.ai interface and right-side tracker
+│   ├── course_utility.py      # Course generation, persistence, progress, AI coach
+│   ├── get_yt_video.py        # Generic and Biology YouTube discovery
+│   ├── chatbot_utility.py     # Biology RAG assistant and chapter routing
+│   ├── vectorize_book.py      # PDF extraction and Chroma indexing
+│   └── vectorize_script.py    # Vectorization command-line entry point
+├── data_original/             # Class 12 Biology source PDFs
+├── chapters_vector_db/        # Generated locally; ignored by Git
+├── vector_db/                 # Generated locally; ignored by Git
+├── runtime_data/              # Local SQLite progress data; ignored by Git
+├── requirements.txt           # Full local/Biology dependencies
+├── requirements-render.txt    # Lightweight Learn.ai production dependencies
+└── render.yaml                # Render web service + PostgreSQL Blueprint
 ```
 
-## Technology Stack
+## Local setup
 
-- Python 3.12
-- Streamlit
-- LangChain
-- ChromaDB
-- Hugging Face Sentence Transformers
-- Groq API
-- PyMuPDF
-- YouTube Search Python
-
-## Setup
-
-### 1. Clone the repository
-
-```powershell
-git clone <repository-url>
-cd project_StudyHere
-```
-
-### 2. Create and activate a virtual environment
+### 1. Create and activate a virtual environment
 
 ```powershell
 python -m venv .venv312
 .\.venv312\Scripts\Activate.ps1
 ```
 
-### 3. Install dependencies
+### 2. Install dependencies
 
 ```powershell
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 4. Configure environment variables
+### 3. Configure environment variables
 
-Create `src/.env` from `src/env_tamplate.txt` and provide your Groq API key:
+Create `src/.env` from `src/env_tamplate.txt`:
 
 ```env
 GROQ_API_KEY=replace_with_your_key
@@ -158,65 +94,45 @@ GROQ_MODEL=openai/gpt-oss-20b
 CLASS_SUBJECT_NAME=class_12/biology
 ```
 
-Never commit the real `.env` file or API key.
+`DATABASE_URL` is optional locally. Without it, Learn.ai creates `runtime_data/learn_ai.db`. Render supplies PostgreSQL automatically through the Blueprint.
 
-### 5. Add textbook PDFs
-
-Place chapter PDFs in a subject directory using numbered, descriptive filenames:
-
-```text
-data_original/class_12/biology/
-```
-
-### 6. Validate and build the vector databases
+### 4. Build the optional Biology indexes
 
 ```powershell
 python .\src\vectorize_script.py --check
 python .\src\vectorize_script.py
 ```
 
-The first run downloads the embedding model and can take several minutes. Subsequent runs reuse the local model cache.
-
-### 7. Start the application
+### 5. Start Learn.ai
 
 ```powershell
 streamlit run .\src\main.py
 ```
 
-Open `http://localhost:8501` if Streamlit does not open the browser automatically.
+Open `http://localhost:8501`.
 
-## How Retrieval Works
+## Render deployment
 
-1. The student selects a subject and optionally one or more chapters.
-2. A greeting is handled locally without querying the textbook or Groq.
-3. A chapter-specific question is routed to the matching chapter vector database.
-4. A general Biology question is searched against the combined Biology database.
-5. Relevant textbook chunks are supplied to the Groq chat model as context.
-6. The answer is returned with the source PDF names and page numbers.
-7. Related YouTube lessons are searched and displayed below the explanation.
+The included Blueprint creates:
 
-## Adding Another Subject
+- a free Python web service for Learn.ai;
+- a free Render PostgreSQL database for learner courses and progress;
+- a protected `GROQ_API_KEY` environment-variable prompt;
+- automatic deploys from the `main` branch;
+- a Streamlit health check at `/_stcore/health`.
 
-Physics, Chemistry, and Mathematics already appear in the interface, but they require their own data before chat is enabled.
+Open the Blueprint after pushing `render.yaml`:
 
-To add a subject:
+```text
+https://dashboard.render.com/blueprint/new?repo=https://github.com/mfslovely/project_StudyHere
+```
 
-1. Create its folder under `data_original/class_12/`.
-2. Add chapter PDFs with numbered filenames.
-3. Update the subject-to-database configuration in the application.
-4. Vectorize the new subject into combined and chapter-level databases.
-5. Confirm that questions retrieve only the selected subject's documents.
+Enter the Groq API key in Render when prompted, then apply the Blueprint. Free Render PostgreSQL instances currently expire after 30 days and should be upgraded before treating the application as a permanent production service.
 
-## Security Notes
+## Security and privacy
 
-- Keep `GROQ_API_KEY` in `.env`; never hard-code or commit it.
-- Generated vector databases are ignored by Git because they can be rebuilt from the PDFs.
-- Textbook context is sent to the configured Groq model when generating grounded answers.
-- YouTube searches send the selected topic or question to the search service.
-
-## Current Status
-
-- Biology: 13 chapters available and vectorized
-- Physics: selector available; textbook data not yet added
-- Chemistry: selector available; textbook data not yet added
-- Mathematics: selector available; textbook data not yet added
+- Never commit `.env`, API keys, database credentials, or local progress databases.
+- Render injects the private PostgreSQL connection string through `DATABASE_URL`.
+- Learner names currently act as lightweight profile identifiers; add proper authentication before storing sensitive or high-stakes personal data.
+- Course topics are sent to YouTube search, web search, and the configured Groq model.
+- Biology textbook excerpts are sent to Groq only when the Biology workspace is used.

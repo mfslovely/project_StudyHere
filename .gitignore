@@ -223,3 +223,6 @@ __marimo__/
 # Generated vector databases
 vector_db/
 chapters_vector_db/
+
+# Learn.ai local progress database (Render uses a persistent disk)
+runtime_data/

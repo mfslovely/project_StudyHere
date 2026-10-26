@@ -3,46 +3,61 @@ from pathlib import Path
 
 import streamlit as st
 
-from chatbot_utility import detect_chapter_from_question, get_chatbot_response
-from get_yt_video import is_video_request, search_youtube_videos
+from course_utility import (
+    create_course,
+    get_course,
+    get_course_coach_response,
+    initialise_database,
+    list_courses,
+    set_item_completed,
+    set_project_completed,
+)
+from get_yt_video import search_youtube_videos
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CHAPTERS_VECTOR_DB_DIR = PROJECT_ROOT / "chapters_vector_db"
-SUBJECTS = ["Biology", "Physics", "Chemistry", "Mathematics"]
-SEARCH_MODE_OPTIONS = {
-    "Auto-detect chapter (recommended)": "auto",
-    "Selected chapter only": "selected",
-    "Search complete subject": "complete",
-}
-
 
 st.set_page_config(
-    page_title="Study Here - Class 12 ",
-    page_icon="🧬",
+    page_title="Learn.ai — Personal AI Learning Paths",
+    page_icon="◈",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 
-def langchain_history(messages):
-    """Convert Streamlit messages into LangChain chat-history tuples."""
-    role_names = {
-        "user": "human",
-        "assistant": "ai",
-    }
-    return [
-        (role_names[message["role"]], message["content"])
-        for message in messages
-        if message["role"] in role_names
-    ]
+def inject_styles():
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"], [data-testid="collapsedControl"] {display: none;}
+        .block-container {max-width: 1500px; padding-top: 1.4rem; padding-bottom: 2rem;}
+        .learn-brand {font-size: 2.35rem; font-weight: 850; letter-spacing: -0.06em;}
+        .learn-brand span {color: #6d5dfc;}
+        .eyebrow {color: #6d5dfc; font-weight: 750; text-transform: uppercase;
+                  letter-spacing: .12em; font-size: .72rem;}
+        .course-hero {background: linear-gradient(135deg,#16172a,#28255d); color: white;
+                      padding: 1.35rem 1.5rem; border-radius: 18px; margin: .35rem 0 1rem;}
+        .course-hero h2 {margin: .25rem 0 .45rem; color: white;}
+        .course-hero p {color: #d6d5e7; margin: 0;}
+        .resource-label {font-size:.72rem; font-weight:800; letter-spacing:.08em;
+                         color:#77738d; text-transform:uppercase; margin-top:.65rem;}
+        .project-card {border:1px solid #d9d3ff; background:#f8f6ff; border-radius:14px;
+                       padding:1rem 1.1rem; margin-top:.8rem;}
+        .video-card {background:linear-gradient(135deg,#5145cd,#7667ff); border-radius:12px;
+                     padding:13px 15px; margin:8px 0; color:white;}
+        .video-card a {color:white !important; text-decoration:underline;}
+        div[data-testid="stVerticalBlockBorderWrapper"] {border-radius: 16px;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 @st.cache_data
-def available_chapters(subject):
-    """Return available chapter databases for the selected subject."""
-    if subject != "Biology":
+def available_chapters():
+    if not CHAPTERS_VECTOR_DB_DIR.is_dir():
         return []
-
     chapters = [
         path.name
         for path in CHAPTERS_VECTOR_DB_DIR.iterdir()
@@ -51,205 +66,320 @@ def available_chapters(subject):
     return sorted(chapters, key=lambda name: int(name.partition(".")[0]))
 
 
+def langchain_history(messages):
+    role_names = {"user": "human", "assistant": "ai"}
+    return [
+        (role_names[item["role"]], item["content"])
+        for item in messages
+        if item.get("role") in role_names
+    ]
+
+
 def show_sources(sources):
     if not sources:
         return
-
     with st.expander("Textbook sources"):
         for source in sources:
-            source_path = source.get("source", "Unknown source")
-            source_name = Path(source_path).name
+            source_name = Path(source.get("source", "Unknown source")).name
             page = source.get("page")
-            page_label = f" - page {page + 1}" if isinstance(page, int) else ""
+            page_label = f" · page {page + 1}" if isinstance(page, int) else ""
             st.write(f"{source_name}{page_label}")
 
 
 def show_video_results(videos):
-    """Render compact YouTube reference cards after an answer."""
     if not videos:
         return
-
-    st.markdown("### Video References")
+    st.markdown("#### Video references")
     for position, video in enumerate(videos, start=1):
-        title = escape(str(video["title"]))
-        channel = video.get("channel")
-        details = [detail for detail in (channel, video.get("duration")) if detail]
-        details_text = escape(" • ".join(str(detail) for detail in details))
-        video_url = escape(str(video["url"]), quote=True)
-        details_html = f'<div class="video-meta">{details_text}</div>' if details else ""
+        title = escape(str(video.get("title", "Video lesson")))
+        url = escape(str(video.get("url", "")), quote=True)
+        details = " • ".join(
+            str(value) for value in (video.get("channel"), video.get("duration")) if value
+        )
         st.markdown(
-            f"""
-            <div style="
-                background: linear-gradient(135deg, #0e7490, #0369a1);
-                border-radius: 10px;
-                padding: 14px 16px;
-                margin: 8px 0;
-                color: white;
-                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
-            ">
-                <div style="font-weight: 700; margin-bottom: 5px;">
-                    {position}. {title}
-                </div>
-                {details_html}
-                <a href="{video_url}" target="_blank" rel="noopener noreferrer"
-                   style="color: white; text-decoration: underline;">
-                    Link: {video_url}
-                </a>
-            </div>
-            """,
+            f'<div class="video-card"><strong>{position}. {title}</strong><br>'
+            f'<small>{escape(details)}</small><br><a href="{url}" target="_blank">Open lesson ↗</a></div>',
             unsafe_allow_html=True,
         )
 
 
-def main():
-    st.title("📚 Study Here")
-
-    subject = st.selectbox(
-        "Select a Subject from Class 12",
-        options=SUBJECTS,
-    )
-    chapter_options = available_chapters(subject)
-    subject_ready = bool(chapter_options)
-    selected_chapters = st.multiselect(
-        f"Select a Chapter from Class 12 - {subject}",
-        options=chapter_options,
-        placeholder="Choose one or more chapters",
-        disabled=not subject_ready,
-    )
-    if not subject_ready:
-        st.info(
-            f"{subject} is available in the subject list, but its PDFs and "
-            "vector database have not been added yet."
+def course_chat(course):
+    st.markdown('<div class="eyebrow">AI course coach</div>', unsafe_allow_html=True)
+    if not course:
+        st.markdown("## Build your own course")
+        st.write(
+            "Enter any topic in the Course Tracker. Learn.ai will collect lessons, "
+            "readings and cheat sheets, track your progress, and unlock a project."
         )
-    elif selected_chapters:
-        st.caption(f"Searching: {', '.join(selected_chapters)}")
+        st.info("Try: Docker, Python APIs, Genetics, Financial Modelling, or UI Design")
+        return
+
+    st.markdown(
+        f"""
+        <div class="course-hero">
+          <div style="opacity:.75;font-size:.8rem;font-weight:700">ACTIVE COURSE · {course['progress']}% LEARNED</div>
+          <h2>{escape(course['title'])}</h2>
+          <p>{escape(course['summary'])}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.progress(course["progress"] / 100, text=f"You've learned {course['progress']}% of this topic")
+
+    if course["progress"] == 100:
+        st.success(f"Learning path complete — your project “{course['project_title']}” is unlocked.")
     else:
-        st.caption(f"No chapter selected - searching the complete {subject} textbook.")
+        next_items = [item for item in course["items"] if not item["completed"]]
+        if next_items:
+            st.caption(f"Recommended next: {next_items[0]['title']}")
 
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if st.session_state.get("active_subject") != subject:
-        st.session_state.messages = []
-        st.session_state.active_subject = subject
+    all_messages = st.session_state.setdefault("course_messages", {})
+    messages = all_messages.setdefault(str(course["id"]), [])
+    for message in messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-    with st.sidebar:
-        st.header("Study Pal")
-        if subject_ready:
-            st.write(
-                f"Answers are grounded in {len(chapter_options)} {subject} chapter PDFs."
-            )
-        else:
-            st.write(f"{subject} study material has not been added yet.")
-        search_mode_label = st.selectbox(
-            "If the question is from another chapter",
-            options=list(SEARCH_MODE_OPTIONS),
-            disabled=not subject_ready,
-            help=(
-                "Auto-detect switches to the matching chapter. You can also lock "
-                "answers to the selected chapter or search the complete subject."
-            ),
-        )
-        search_mode = SEARCH_MODE_OPTIONS[search_mode_label]
-        if st.button("Clear conversation", use_container_width=True):
-            st.session_state.messages = []
-            st.rerun()
+    prompt = st.chat_input(
+        f"Ask Learn.ai about {course['topic']} or your project…",
+        key=f"course_chat_{course['id']}",
+    )
+    if not prompt:
+        return
 
-    for message in st.session_state.messages:
+    messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    with st.chat_message("assistant"):
+        try:
+            with st.spinner("Your course coach is thinking…"):
+                answer = get_course_coach_response(
+                    course,
+                    prompt,
+                    chat_history=langchain_history(messages[:-1]),
+                )
+            st.markdown(answer)
+        except Exception as error:
+            answer = f"I couldn't answer right now: {error}"
+            st.error(answer)
+    messages.append({"role": "assistant", "content": answer})
+
+
+def biology_library():
+    st.markdown('<div class="eyebrow">Class 12 textbook library</div>', unsafe_allow_html=True)
+    st.markdown("## Biology study assistant")
+    chapters = available_chapters()
+    if not chapters:
+        st.warning("Biology chapter indexes are not available on this deployment yet.")
+        return
+
+    from chatbot_utility import get_chatbot_response
+
+    selected = st.multiselect(
+        "Choose one or more chapters",
+        chapters,
+        placeholder="No selection searches the complete Biology textbook",
+    )
+    mode_label = st.radio(
+        "Search behaviour",
+        ["Auto-detect chapter", "Selected chapter only", "Complete textbook"],
+        horizontal=True,
+    )
+    mode = {
+        "Auto-detect chapter": "auto",
+        "Selected chapter only": "selected",
+        "Complete textbook": "complete",
+    }[mode_label]
+
+    messages = st.session_state.setdefault("biology_messages", [])
+    for message in messages:
         with st.chat_message(message["role"]):
             if message.get("scope_notice"):
                 st.info(message["scope_notice"])
             st.markdown(message["content"])
-            if message["role"] == "assistant":
-                show_sources(message.get("sources", []))
-                videos = message.get("videos", [])
-                if videos:
-                    show_video_results(videos)
+            show_sources(message.get("sources", []))
+            show_video_results(message.get("videos", []))
 
-    question = st.chat_input(
-        f"Ask a {subject} question...",
-        disabled=not subject_ready,
-    )
+    question = st.chat_input("Ask a Class 12 Biology question…", key="biology_chat")
     if not question:
         return
-
-    previous_history = langchain_history(st.session_state.messages)
-    st.session_state.messages.append(
-        {
-            "role": "user",
-            "content": question,
-        }
-    )
-
+    history = langchain_history(messages)
+    messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.markdown(question)
-
     with st.chat_message("assistant"):
         try:
-            if is_video_request(question):
-                detected_chapter = detect_chapter_from_question(question)
-                if search_mode == "auto" and detected_chapter:
-                    search_topic = detected_chapter[1]
-                elif search_mode == "complete":
-                    search_topic = f"Class 12 {subject} {question}"
-                else:
-                    search_topic = " ".join(selected_chapters)
-                if not search_topic:
-                    search_topic = question
-                with st.spinner("Finding relevant YouTube lessons..."):
-                    videos = search_youtube_videos(search_topic, limit=3)
-
-                if videos:
-                    answer = "Here are some relevant video lessons you can watch:"
-                else:
-                    answer = "I couldn't find a relevant video for that topic."
-                st.markdown(answer)
-                show_video_results(videos)
-                assistant_message = {
-                    "role": "assistant",
-                    "content": answer,
-                    "sources": [],
-                    "videos": videos,
-                }
-            else:
-                with st.spinner("Searching the textbook..."):
-                    response = get_chatbot_response(
-                        question,
-                        chat_history=previous_history,
-                        selected_chapters=selected_chapters,
-                        search_mode=search_mode,
-                    )
-                if response.get("scope_notice"):
-                    st.info(response["scope_notice"])
-                st.markdown(response["answer"])
-                show_sources(response["sources"])
-                videos = []
-                if response["sources"]:
-                    search_topic = " ".join(response.get("search_scope", []) + [question])
-                    try:
-                        with st.spinner("Finding related video references..."):
-                            videos = search_youtube_videos(search_topic, limit=3)
-                    except Exception:
-                        st.caption("Video references are temporarily unavailable.")
-                show_video_results(videos)
-                assistant_message = {
-                    "role": "assistant",
-                    "content": response["answer"],
-                    "sources": response["sources"],
-                    "videos": videos,
-                    "question": question,
-                    "scope_notice": response.get("scope_notice"),
-                }
-        except Exception as error:
-            error_message = f"I could not answer that question: {error}"
-            st.error(error_message)
+            with st.spinner("Searching the textbook…"):
+                response = get_chatbot_response(
+                    question,
+                    chat_history=history,
+                    selected_chapters=selected,
+                    search_mode=mode,
+                )
+            if response.get("scope_notice"):
+                st.info(response["scope_notice"])
+            st.markdown(response["answer"])
+            show_sources(response["sources"])
+            videos = []
+            if response["sources"]:
+                try:
+                    topic = " ".join(response.get("search_scope", []) + [question])
+                    videos = search_youtube_videos(topic, limit=3)
+                except Exception:
+                    st.caption("Video references are temporarily unavailable.")
+            show_video_results(videos)
             assistant_message = {
                 "role": "assistant",
-                "content": error_message,
-                "sources": [],
-                "question": question,
+                "content": response["answer"],
+                "sources": response["sources"],
+                "videos": videos,
+                "scope_notice": response.get("scope_notice"),
             }
+        except Exception as error:
+            assistant_message = {
+                "role": "assistant",
+                "content": f"I couldn't answer that question: {error}",
+            }
+            st.error(assistant_message["content"])
+    messages.append(assistant_message)
 
-    st.session_state.messages.append(assistant_message)
+
+def render_course_items(course, user_name):
+    groups = [
+        ("video", "Video lessons", "▶"),
+        ("article", "Blogs & guides", "↗"),
+        ("cheatsheet", "Cheat sheets", "⌘"),
+    ]
+    for item_type, heading, icon in groups:
+        items = [item for item in course["items"] if item["item_type"] == item_type]
+        if not items:
+            continue
+        st.markdown(f'<div class="resource-label">{icon} {heading}</div>', unsafe_allow_html=True)
+        for item in items:
+            checked = st.checkbox(
+                item["title"],
+                value=bool(item["completed"]),
+                key=f"course_{course['id']}_item_{item['id']}",
+            )
+            if checked != bool(item["completed"]):
+                set_item_completed(user_name, course["id"], item["id"], checked)
+                st.rerun()
+            if item.get("url"):
+                st.markdown(f"[Open resource ↗]({item['url']})")
+            if item_type == "cheatsheet" and item.get("content"):
+                with st.expander("View quick reference"):
+                    st.markdown(item["content"])
+
+
+def course_tracker(user_name):
+    st.markdown("### Course Tracker")
+    st.caption("Your personal learning paths")
+
+    with st.form("create_course_form", clear_on_submit=True):
+        topic = st.text_input("Create a course", placeholder="e.g. Docker for beginners")
+        create_clicked = st.form_submit_button("✦ Build with AI", use_container_width=True)
+    if create_clicked:
+        try:
+            with st.spinner("Collecting videos, blogs and building your project…"):
+                created = create_course(user_name, topic)
+            st.session_state.active_course_id = created["id"]
+            st.success("Course created")
+            st.rerun()
+        except Exception as error:
+            st.error(f"Course could not be created: {error}")
+
+    courses = list_courses(user_name)
+    if not courses:
+        st.info("No courses yet. Create your first learning path above.")
+        return None
+
+    active_id = st.session_state.get("active_course_id")
+    if active_id not in [course["id"] for course in courses]:
+        active_id = courses[0]["id"]
+        st.session_state.active_course_id = active_id
+
+    st.markdown('<div class="resource-label">Your courses</div>', unsafe_allow_html=True)
+    for course in courses:
+        prefix = "●" if course["id"] == active_id else "○"
+        if st.button(
+            f"{prefix} {course['topic']}  ·  {course['progress']}%",
+            key=f"select_course_{course['id']}",
+            use_container_width=True,
+        ):
+            st.session_state.active_course_id = course["id"]
+            st.rerun()
+
+    course = get_course(active_id, user_name)
+    if not course:
+        return None
+    st.divider()
+    st.markdown(f"#### {course['title']}")
+    st.progress(course["progress"] / 100, text=f"{course['progress']}% learned")
+    st.caption(f"{course['completed_count']} of {course['resource_count']} resources completed")
+    render_course_items(course, user_name)
+
+    st.markdown('<div class="resource-label">Capstone project</div>', unsafe_allow_html=True)
+    if course["progress"] < 100:
+        st.caption("🔒 Complete the learning resources to unlock your project.")
+    else:
+        st.markdown(
+            f'<div class="project-card"><strong>{escape(course["project_title"])}</strong><br>'
+            f'{escape(course["project_brief"])}</div>',
+            unsafe_allow_html=True,
+        )
+        for deliverable in course["project_deliverables"]:
+            st.markdown(f"- {deliverable}")
+        project_done = st.checkbox(
+            "I completed this project",
+            value=bool(course["project_completed"]),
+            key=f"project_complete_{course['id']}",
+        )
+        if project_done != bool(course["project_completed"]):
+            set_project_completed(user_name, course["id"], project_done)
+            st.rerun()
+        st.caption("Ask the AI coach in chat for planning, code, debugging, or feedback.")
+    return course
+
+
+def main():
+    inject_styles()
+    initialise_database()
+
+    header_left, header_right = st.columns([3, 1])
+    with header_left:
+        st.markdown('<div class="learn-brand">Learn<span>.ai</span></div>', unsafe_allow_html=True)
+        st.caption("Turn any topic into a guided course, measurable progress, and a real project.")
+    with header_right:
+        user_name = st.text_input(
+            "Learner profile",
+            value=st.session_state.get("learner_name", "Learner"),
+            placeholder="Your name",
+        )
+        st.session_state.learner_name = user_name or "Learner"
+
+    st.divider()
+    content_column, tracker_column = st.columns([2.15, 1], gap="large")
+
+    with tracker_column:
+        with st.container(height=760, border=True):
+            active_course = course_tracker(st.session_state.learner_name)
+
+    with content_column:
+        mode = st.segmented_control(
+            "Workspace",
+            ["AI Course Coach", "Biology Textbook"],
+            default="AI Course Coach",
+            label_visibility="collapsed",
+        )
+        if mode == "Biology Textbook":
+            biology_library()
+        else:
+            active_id = st.session_state.get("active_course_id")
+            course = (
+                get_course(active_id, st.session_state.learner_name)
+                if active_id
+                else active_course
+            )
+            course_chat(course)
 
 
 if __name__ == "__main__":

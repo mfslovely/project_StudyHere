@@ -14,17 +14,15 @@ def is_video_request(query):
     return bool(query and VIDEO_REQUEST_PATTERN.search(query))
 
 
-def search_youtube_videos(query, limit=3):
+def search_youtube_videos(query, limit=3, context_prefix="Class 12 Biology"):
     """Return a small list of YouTube videos related to a study question."""
     if not query or not query.strip():
         return []
     if limit < 1:
         return []
 
-    search = VideosSearch(
-        f"Class 12 Biology {query.strip()}",
-        limit=min(limit, 10),
-    )
+    search_query = " ".join(part for part in (context_prefix, query.strip()) if part)
+    search = VideosSearch(search_query, limit=min(limit, 10))
     results = search.result().get("result", [])
 
     videos = []
