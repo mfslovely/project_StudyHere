@@ -9,6 +9,7 @@ from course_utility import (
     get_course_coach_response,
     initialise_database,
     list_courses,
+    regenerate_course_cheatsheets,
     set_item_completed,
     set_project_completed,
 )
@@ -309,6 +310,19 @@ def course_tracker(user_name):
     st.progress(course["progress"] / 100, text=f"{course['progress']}% learned")
     st.caption(f"{course['completed_count']} of {course['resource_count']} resources completed")
     render_course_items(course, user_name)
+    if st.button(
+        "↻ Regenerate interview cheat sheets",
+        key=f"regenerate_cheatsheets_{course['id']}",
+        use_container_width=True,
+        help="Replace old notes with short interview questions and answers.",
+    ):
+        try:
+            with st.spinner("Creating interview quick-revision sheets…"):
+                regenerate_course_cheatsheets(user_name, course["id"])
+            st.success("Interview cheat sheets updated")
+            st.rerun()
+        except Exception as error:
+            st.error(f"Cheat sheets could not be updated: {error}")
 
     st.markdown('<div class="resource-label">Capstone project</div>', unsafe_allow_html=True)
     if course["progress"] < 100:
