@@ -78,6 +78,26 @@ def save_message(
         return False
 
 
+def save_message_videos(user_id, conversation_id, message_index, videos):
+    """Attach video references to an existing saved assistant message."""
+    collection = _collection()
+    if collection is None or message_index < 0:
+        return False
+    try:
+        result = collection.update_one(
+            {"user_id": user_id, "conversation_id": conversation_id},
+            {
+                "$set": {
+                    f"messages.{message_index}.videos": list(videos),
+                    "updated_at": _now(),
+                }
+            },
+        )
+        return bool(result.matched_count)
+    except PyMongoError:
+        return False
+
+
 def list_conversations(user_id, limit=12):
     collection = _collection()
     if collection is None:

@@ -21,6 +21,7 @@ from chat_history import (
     load_messages,
     mongo_history_enabled,
     save_message,
+    save_message_videos,
 )
 from get_yt_video import search_youtube_videos
 from biology_utility import available_biology_chapters, get_biology_response
@@ -142,6 +143,22 @@ def find_related_videos(question, learning_context):
         return []
 
 
+def backfill_video_references(
+    messages, user_id, conversation_id, learning_context
+):
+    """Add video references to saved answers created before this feature existed."""
+    latest_question = ""
+    for index, message in enumerate(messages):
+        if message.get("role") == "user":
+            latest_question = message.get("content", "")
+            continue
+        if message.get("role") != "assistant" or "videos" in message:
+            continue
+        videos = find_related_videos(latest_question, learning_context) if latest_question else []
+        message["videos"] = videos
+        save_message_videos(user_id, conversation_id, index, videos)
+
+
 def conversation_title(question, fallback="New learning chat"):
     cleaned = " ".join((question or "").strip().split())
     return cleaned[:54] + ("…" if len(cleaned) > 54 else "") if cleaned else fallback
@@ -176,6 +193,9 @@ def general_learning_chat(user_name, grade=None, subject=None):
     if cache_key not in all_messages:
         all_messages[cache_key] = load_messages(user_id, conversation_id)
     messages = all_messages[cache_key]
+    backfill_video_references(
+        messages, user_id, conversation_id, learning_context
+    )
 
     if not messages and not is_school:
         st.markdown(
@@ -274,6 +294,9 @@ def course_chat(course, user_name):
     if cache_key not in all_messages:
         all_messages[cache_key] = load_messages(user_id, conversation_id)
     messages = all_messages[cache_key]
+    backfill_video_references(
+        messages, user_id, conversation_id, course["topic"]
+    )
     for message in messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -362,6 +385,9 @@ def biology_library(user_name):
     if cache_key not in biology_messages:
         biology_messages[cache_key] = load_messages(user_id, conversation_id)
     messages = biology_messages[cache_key]
+    backfill_video_references(
+        messages, user_id, conversation_id, "Class 12 Biology NCERT"
+    )
     for message in messages:
         with st.chat_message(message["role"]):
             if message.get("scope_notice"):
