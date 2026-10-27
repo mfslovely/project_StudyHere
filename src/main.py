@@ -1,9 +1,22 @@
 from html import escape
+import os
 from pathlib import Path
+from time import sleep
 from uuid import uuid4
 
 import streamlit as st
+from streamlit_cookies_controller import CookieController
 
+from auth_utility import (
+    AuthError,
+    authentication_available,
+    issue_tokens,
+    register_user,
+    revoke_refresh_token,
+    rotate_refresh_token,
+    user_from_access_token,
+    verify_password,
+)
 from course_utility import (
     create_course,
     get_course,
@@ -28,6 +41,13 @@ from biology_utility import available_biology_chapters, get_biology_response
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ACCESS_COOKIE_MAX_AGE = 20 * 60
+REFRESH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
+
+
+def _secure_cookie():
+    """Require HTTPS-only cookies on Render while keeping localhost testable."""
+    return bool(os.getenv("RENDER") or os.getenv("RENDER_EXTERNAL_URL"))
 
 st.set_page_config(
     page_title="Learn.ai — Personal AI Learning Paths",
@@ -56,6 +76,11 @@ def inject_styles():
         .sidebar-brand {font-size:1.55rem; font-weight:850; letter-spacing:-.05em;
             margin:.1rem 0 1rem; color:var(--ink);}
         .sidebar-brand span {color:var(--accent);}
+        .signed-in-user {background:#f3f1ff;border:1px solid #ded8ff;border-radius:12px;
+            padding:.75rem .85rem;margin:.35rem 0 .75rem;color:#302b63;}
+        .auth-kicker {color:var(--accent);font-weight:800;text-transform:uppercase;
+            letter-spacing:.14em;font-size:.72rem;margin-bottom:.45rem;}
+        .auth-copy {color:var(--muted);font-size:1.02rem;margin-bottom:1.25rem;}
         .sidebar-section {color:#5f5f69; font-size:.68rem; font-weight:800;
             letter-spacing:.1em; text-transform:uppercase; margin:1.15rem 0 .35rem;}
         .eyebrow {color: #6d5dfc; font-weight: 750; text-transform: uppercase;
@@ -162,6 +187,127 @@ def backfill_video_references(
 def conversation_title(question, fallback="New learning chat"):
     cleaned = " ".join((question or "").strip().split())
     return cleaned[:54] + ("…" if len(cleaned) > 54 else "") if cleaned else fallback
+
+
+def _store_authenticated_session(user, tokens, cookies):
+    st.session_state.auth_user = user
+    st.session_state.access_token = tokens["access_token"]
+    cookies.set(
+        "access_token",
+        tokens["access_token"],
+        max_age=ACCESS_COOKIE_MAX_AGE,
+        secure=_secure_cookie(),
+        same_site="strict",
+    )
+    cookies.set(
+        "refresh_token",
+        tokens["refresh_token"],
+        max_age=REFRESH_COOKIE_MAX_AGE,
+        secure=_secure_cookie(),
+        same_site="strict",
+    )
+    # The cookie component writes in the browser asynchronously. Give its
+    # frontend a moment to receive both writes before a form handler reruns.
+    sleep(0.5)
+
+
+def authentication_gate(cookies):
+    """Return the authenticated user or render the login/register screen."""
+    cached_user = st.session_state.get("auth_user")
+    access_token = st.session_state.get("access_token")
+    validated_user = user_from_access_token(access_token)
+    if cached_user and validated_user and cached_user["id"] == validated_user["id"]:
+        return validated_user
+
+    browser_access_token = cookies.get("access_token")
+    browser_user = user_from_access_token(browser_access_token)
+    if browser_user:
+        st.session_state.auth_user = browser_user
+        st.session_state.access_token = browser_access_token
+        return browser_user
+
+    refresh_token = cookies.get("refresh_token")
+    if refresh_token:
+        refreshed = rotate_refresh_token(refresh_token)
+        if refreshed:
+            _store_authenticated_session(
+                refreshed["user"],
+                {
+                    "access_token": refreshed["access_token"],
+                    "refresh_token": refreshed["refresh_token"],
+                },
+                cookies,
+            )
+            return refreshed["user"]
+        if cookies.get("access_token"):
+            cookies.remove("access_token")
+        if cookies.get("refresh_token"):
+            cookies.remove("refresh_token")
+
+    left, centre, right = st.columns([1, 1.15, 1])
+    with centre:
+        st.markdown('<div class="sidebar-brand">Learn<span>.ai</span></div>', unsafe_allow_html=True)
+        st.markdown('<div class="auth-kicker">Private learning workspace</div>', unsafe_allow_html=True)
+        st.markdown("## Welcome back")
+        st.markdown(
+            '<div class="auth-copy">Sign in to access only your chats, courses, and progress.</div>',
+            unsafe_allow_html=True,
+        )
+        login_tab, register_tab = st.tabs(["Log in", "Create account"])
+        with login_tab:
+            with st.form("login_form"):
+                username = st.text_input("Username", key="login_username")
+                password = st.text_input("Password", type="password", key="login_password")
+                login_submitted = st.form_submit_button(
+                    "Log in", type="primary", use_container_width=True
+                )
+            if login_submitted:
+                try:
+                    user = verify_password(username, password)
+                    _store_authenticated_session(user, issue_tokens(user["id"]), cookies)
+                    st.rerun()
+                except AuthError as error:
+                    st.error(str(error))
+
+        with register_tab:
+            with st.form("register_form"):
+                new_username = st.text_input(
+                    "Choose a username", key="register_username"
+                )
+                new_password = st.text_input(
+                    "Choose a password", type="password", key="register_password"
+                )
+                confirm_password = st.text_input(
+                    "Confirm password", type="password", key="register_confirm"
+                )
+                register_submitted = st.form_submit_button(
+                    "Create account", type="primary", use_container_width=True
+                )
+            if register_submitted:
+                if new_password != confirm_password:
+                    st.error("Passwords do not match.")
+                else:
+                    try:
+                        user = register_user(new_username, new_password)
+                        _store_authenticated_session(user, issue_tokens(user["id"]), cookies)
+                        st.rerun()
+                    except AuthError as error:
+                        st.error(str(error))
+        st.caption("Passwords are bcrypt-hashed. Your browser keeps an opaque refresh token for automatic login.")
+    st.stop()
+
+
+def sign_out(cookies):
+    refresh_token = cookies.get("refresh_token")
+    revoke_refresh_token(refresh_token)
+    if cookies.get("access_token"):
+        cookies.remove("access_token")
+    if refresh_token:
+        cookies.remove("refresh_token")
+    for key in list(st.session_state):
+        if key != "learn_ai_auth_cookies":
+            del st.session_state[key]
+    st.rerun()
 
 
 def general_learning_chat(user_name, grade=None, subject=None):
@@ -613,7 +759,7 @@ def open_saved_conversation(conversation):
         st.session_state.general_conversation_title = conversation.get("title", "Learning chat")
 
 
-def render_sidebar(user_name):
+def render_sidebar(owner_id):
     if st.button("＋  New learning chat", use_container_width=True, type="primary"):
         start_new_chat()
         st.rerun()
@@ -631,7 +777,7 @@ def render_sidebar(user_name):
 
     st.markdown('<div class="sidebar-section">Saved chats</div>', unsafe_allow_html=True)
     if mongo_history_enabled():
-        conversations = list_conversations(normalise_user_id(user_name), limit=10)
+        conversations = list_conversations(normalise_user_id(owner_id), limit=10)
         if conversations:
             for conversation in conversations:
                 label = conversation.get("title", "Untitled chat")
@@ -648,7 +794,7 @@ def render_sidebar(user_name):
     else:
         st.caption("MongoDB is required for saved chats.")
 
-    courses = list_courses(user_name)
+    courses = list_courses(owner_id)
     if courses:
         st.markdown('<div class="sidebar-section">Your courses</div>', unsafe_allow_html=True)
         for course in courses[:8]:
@@ -705,28 +851,36 @@ def courses_workspace(user_name):
 def main():
     inject_styles()
     initialise_database()
+    if not authentication_available():
+        st.error("Authentication is unavailable because MongoDB is not configured.")
+        st.stop()
+    cookies = CookieController(key="learn_ai_auth_cookies")
+    authenticated_user = authentication_gate(cookies)
+    owner_id = authenticated_user["id"]
+    username = authenticated_user["username"]
+
     st.session_state.setdefault("workspace_mode", "General Learning")
     st.session_state.setdefault("school_grade", "10")
     st.session_state.setdefault("school_subject", "Mathematics")
 
     with st.sidebar:
         st.markdown('<div class="sidebar-brand">Learn<span>.ai</span></div>', unsafe_allow_html=True)
-        user_name = st.text_input(
-            "Learner ID",
-            value=st.session_state.get("learner_name", "Learner"),
-            placeholder="e.g. lovely-gupta",
-            help="Use the same unique ID to reopen courses and saved chats.",
+        st.markdown(
+            f'<div class="signed-in-user"><small>Signed in as</small><br>'
+            f'<strong>@{escape(username)}</strong></div>',
+            unsafe_allow_html=True,
         )
-        st.session_state.learner_name = user_name or "Learner"
-        render_sidebar(st.session_state.learner_name)
+        if st.button("Sign out", use_container_width=True):
+            sign_out(cookies)
+        render_sidebar(owner_id)
 
     mode = st.session_state.workspace_mode
     if mode == "School":
-        school_workspace(st.session_state.learner_name)
+        school_workspace(owner_id)
     elif mode == "My Courses":
-        courses_workspace(st.session_state.learner_name)
+        courses_workspace(owner_id)
     else:
-        general_learning_chat(st.session_state.learner_name)
+        general_learning_chat(owner_id)
 
 
 if __name__ == "__main__":
