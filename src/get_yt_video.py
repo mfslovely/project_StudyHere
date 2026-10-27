@@ -14,7 +14,7 @@ def is_video_request(query):
     return bool(query and VIDEO_REQUEST_PATTERN.search(query))
 
 
-def search_youtube_videos(query, limit=3, context_prefix="Class 12 Biology"):
+def search_youtube_videos(query, limit=3, context_prefix="Educational tutorial"):
     """Return a small list of YouTube videos related to a study question."""
     if not query or not query.strip():
         return []
@@ -34,7 +34,7 @@ def search_youtube_videos(query, limit=3, context_prefix="Class 12 Biology"):
         thumbnails = result.get("thumbnails") or []
         videos.append(
             {
-                "title": result.get("title", "Biology video"),
+                "title": result.get("title", "Video lesson"),
                 "url": result.get("link") or f"https://www.youtube.com/watch?v={video_id}",
                 "duration": result.get("duration"),
                 "channel": (result.get("channel") or {}).get("name"),

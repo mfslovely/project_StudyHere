@@ -130,6 +130,18 @@ def show_video_results(videos):
         )
 
 
+def find_related_videos(question, learning_context):
+    """Return video lessons tailored to the user's exact question and workspace."""
+    try:
+        return search_youtube_videos(
+            question,
+            limit=3,
+            context_prefix=f"{learning_context} lesson explanation",
+        )
+    except Exception:
+        return []
+
+
 def conversation_title(question, fallback="New learning chat"):
     cleaned = " ".join((question or "").strip().split())
     return cleaned[:54] + ("…" if len(cleaned) > 54 else "") if cleaned else fallback
@@ -188,6 +200,7 @@ def general_learning_chat(user_name, grade=None, subject=None):
     for message in messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            show_video_results(message.get("videos", []))
 
     question = st.chat_input(placeholder, key=f"learning_chat_{conversation_id}")
     if not question:
@@ -210,10 +223,16 @@ def general_learning_chat(user_name, grade=None, subject=None):
                     chat_history=langchain_history(messages[:-1]),
                 )
             st.markdown(answer)
+            with st.spinner("Finding related video lessons…"):
+                videos = find_related_videos(question, learning_context)
+            show_video_results(videos)
+            if not videos:
+                st.caption("Video references are temporarily unavailable.")
         except Exception as error:
             answer = f"I couldn't answer right now: {error}"
+            videos = []
             st.error(answer)
-    assistant_message = {"role": "assistant", "content": answer}
+    assistant_message = {"role": "assistant", "content": answer, "videos": videos}
     messages.append(assistant_message)
     save_message(user_id, conversation_id, title, kind, assistant_message)
 
@@ -258,6 +277,7 @@ def course_chat(course, user_name):
     for message in messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            show_video_results(message.get("videos", []))
 
     prompt = st.chat_input(
         f"Ask Learn.ai about {course['topic']} or your project…",
@@ -287,16 +307,23 @@ def course_chat(course, user_name):
                     chat_history=langchain_history(messages[:-1]),
                 )
             st.markdown(answer)
+            with st.spinner("Finding related video lessons…"):
+                videos = find_related_videos(prompt, course["topic"])
+            show_video_results(videos)
+            if not videos:
+                st.caption("Video references are temporarily unavailable.")
         except Exception as error:
             answer = f"I couldn't answer right now: {error}"
+            videos = []
             st.error(answer)
-    messages.append({"role": "assistant", "content": answer})
+    assistant_message = {"role": "assistant", "content": answer, "videos": videos}
+    messages.append(assistant_message)
     save_message(
         user_id,
         conversation_id,
         course["title"],
         "course",
-        {"role": "assistant", "content": answer},
+        assistant_message,
         course_id=course["id"],
     )
 
@@ -371,14 +398,14 @@ def biology_library(user_name):
                 st.info(response["scope_notice"])
             st.markdown(response["answer"])
             show_sources(response["sources"])
-            videos = []
-            if response["sources"]:
-                try:
-                    topic = " ".join(response.get("search_scope", []) + [question])
-                    videos = search_youtube_videos(topic, limit=3)
-                except Exception:
-                    st.caption("Video references are temporarily unavailable.")
+            topic_context = " ".join(
+                ["Class 12 Biology NCERT"] + response.get("search_scope", [])
+            )
+            with st.spinner("Finding related video lessons…"):
+                videos = find_related_videos(question, topic_context)
             show_video_results(videos)
+            if not videos:
+                st.caption("Video references are temporarily unavailable.")
             assistant_message = {
                 "role": "assistant",
                 "content": response["answer"],
