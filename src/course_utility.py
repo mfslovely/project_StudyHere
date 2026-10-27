@@ -621,3 +621,28 @@ pretending that unfinished work is complete.
     model = ChatGroq(model=DEFAULT_CHAT_MODEL, temperature=0.25)
     return str(model.invoke(prompt).content)
 
+
+def get_learning_response(question, learning_context="General learning", chat_history=None):
+    """Answer open learning questions without pretending to use a textbook."""
+    if not os.getenv("GROQ_API_KEY"):
+        raise RuntimeError("GROQ_API_KEY is missing from the Render or local environment.")
+
+    history_text = "\n".join(
+        f"{role}: {content}" for role, content in (chat_history or [])[-8:]
+    )
+    prompt = f"""You are Learn.ai, a friendly and accurate learning assistant.
+Learning space: {learning_context}
+
+Explain concepts at the student's level. Start with a direct answer, then use short sections,
+examples, steps, or a compact table only when they improve understanding. For school questions,
+match the selected class and subject. For general learning, support any academic, technical,
+career, language, business, or creative topic. Never claim that an answer comes from a textbook
+unless textbook content was actually supplied.
+
+Recent conversation:
+{history_text}
+Student: {question}
+"""
+    model = ChatGroq(model=DEFAULT_CHAT_MODEL, temperature=0.25)
+    return str(model.invoke(prompt).content)
+

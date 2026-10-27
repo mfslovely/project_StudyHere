@@ -1,5 +1,6 @@
 from html import escape
 from pathlib import Path
+from uuid import uuid4
 
 import streamlit as st
 
@@ -7,6 +8,7 @@ from course_utility import (
     create_course,
     get_course,
     get_course_coach_response,
+    get_learning_response,
     initialise_database,
     list_courses,
     normalise_user_id,
@@ -30,7 +32,7 @@ st.set_page_config(
     page_title="Learn.ai — Personal AI Learning Paths",
     page_icon="◈",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 
@@ -38,12 +40,35 @@ def inject_styles():
     st.markdown(
         """
         <style>
-        [data-testid="stSidebar"], [data-testid="collapsedControl"] {display: none;}
-        .block-container {max-width: 1500px; padding-top: 1.4rem; padding-bottom: 2rem;}
+        :root {--ink:#262638; --muted:#777786; --line:#e8e7e3; --accent:#6d5dfc;}
+        [data-testid="stSidebar"] {min-width:290px; max-width:290px; background:#f7f7f5;
+            border-right:1px solid var(--line);}
+        [data-testid="stSidebar"] .block-container {padding-top:1.25rem;}
+        [data-testid="stSidebar"] button {text-align:left; justify-content:flex-start;
+            border-color:transparent; background:transparent;}
+        [data-testid="stSidebar"] button:hover {background:#ecebe7;}
+        [data-testid="stSidebar"] button[kind="primary"] {background:#e9e6ff;
+            color:#3f32b5; border:1px solid #d8d2ff;}
+        .block-container {max-width:1180px; padding-top:1.6rem; padding-bottom:2rem;}
         .learn-brand {font-size: 2.35rem; font-weight: 850; letter-spacing: -0.06em;}
         .learn-brand span {color: #6d5dfc;}
+        .sidebar-brand {font-size:1.55rem; font-weight:850; letter-spacing:-.05em;
+            margin:.1rem 0 1rem; color:var(--ink);}
+        .sidebar-brand span {color:var(--accent);}
+        .sidebar-section {color:#5f5f69; font-size:.68rem; font-weight:800;
+            letter-spacing:.1em; text-transform:uppercase; margin:1.15rem 0 .35rem;}
         .eyebrow {color: #6d5dfc; font-weight: 750; text-transform: uppercase;
                   letter-spacing: .12em; font-size: .72rem;}
+        .welcome-wrap {text-align:center; padding:8vh 0 1.25rem;}
+        .welcome-wrap h1 {font-size:2.55rem; letter-spacing:-.045em; margin:.4rem 0;}
+        .welcome-wrap p {color:var(--muted); font-size:1.05rem;}
+        .mode-card {border:1px solid var(--line); border-radius:16px; padding:1rem 1.1rem;
+            background:#fff; min-height:122px;}
+        .mode-card strong {font-size:1.05rem; color:var(--ink);}
+        .mode-card p {color:var(--muted); margin:.4rem 0 0; font-size:.92rem;}
+        .workspace-head {border-bottom:1px solid var(--line); margin-bottom:1.15rem;
+            padding-bottom:.85rem;}
+        .workspace-head h1 {font-size:2rem; letter-spacing:-.035em; margin:.15rem 0;}
         .course-hero {background: linear-gradient(135deg,#16172a,#28255d); color: white;
                       padding: 1.35rem 1.5rem; border-radius: 18px; margin: .35rem 0 1rem;}
         .course-hero h2 {margin: .25rem 0 .45rem; color: white;}
@@ -56,6 +81,7 @@ def inject_styles():
                      padding:13px 15px; margin:8px 0; color:white;}
         .video-card a {color:white !important; text-decoration:underline;}
         div[data-testid="stVerticalBlockBorderWrapper"] {border-radius: 16px;}
+        .stChatInput {max-width:900px; margin:auto;}
         </style>
         """,
         unsafe_allow_html=True,
@@ -102,6 +128,94 @@ def show_video_results(videos):
             f'<small>{escape(details)}</small><br><a href="{url}" target="_blank">Open lesson ↗</a></div>',
             unsafe_allow_html=True,
         )
+
+
+def conversation_title(question, fallback="New learning chat"):
+    cleaned = " ".join((question or "").strip().split())
+    return cleaned[:54] + ("…" if len(cleaned) > 54 else "") if cleaned else fallback
+
+
+def general_learning_chat(user_name, grade=None, subject=None):
+    is_school = grade is not None and subject is not None
+    if is_school:
+        learning_context = f"Class {grade} · {subject}"
+        conversation_id = f"school-{grade}-{normalise_user_id(subject)}"
+        title = learning_context
+        kind = f"school:{grade}:{subject}"
+        placeholder = f"Ask a Class {grade} {subject} question…"
+        st.markdown(
+            f'<div class="workspace-head"><div class="eyebrow">School learning</div>'
+            f'<h1>Class {grade} · {escape(subject)}</h1></div>',
+            unsafe_allow_html=True,
+        )
+        st.caption("AI tutor mode · Answers are not claimed as textbook extracts.")
+    else:
+        learning_context = "General learning across any field"
+        conversation_id = st.session_state.setdefault(
+            "general_conversation_id", f"general-{uuid4().hex}"
+        )
+        title = st.session_state.get("general_conversation_title", "New learning chat")
+        kind = "general"
+        placeholder = "Ask anything you want to learn…"
+
+    user_id = normalise_user_id(user_name)
+    all_messages = st.session_state.setdefault("learning_messages", {})
+    cache_key = f"{user_id}:{conversation_id}"
+    if cache_key not in all_messages:
+        all_messages[cache_key] = load_messages(user_id, conversation_id)
+    messages = all_messages[cache_key]
+
+    if not messages and not is_school:
+        st.markdown(
+            '<div class="welcome-wrap"><div class="eyebrow">Learn anything</div>'
+            '<h1>What would you like to understand?</h1>'
+            '<p>Ask a question, explore a new field, or turn a topic into a guided course.</p></div>',
+            unsafe_allow_html=True,
+        )
+        cards = st.columns(3)
+        card_copy = [
+            ("Understand a concept", "Get clear explanations with examples and steps."),
+            ("Prepare for an interview", "Revise definitions, questions, and practical answers."),
+            ("Build a learning path", "Open My Courses to collect videos, blogs, and a project."),
+        ]
+        for column, (heading, copy) in zip(cards, card_copy):
+            with column:
+                st.markdown(
+                    f'<div class="mode-card"><strong>{heading}</strong><p>{copy}</p></div>',
+                    unsafe_allow_html=True,
+                )
+
+    for message in messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    question = st.chat_input(placeholder, key=f"learning_chat_{conversation_id}")
+    if not question:
+        return
+
+    if not is_school and title == "New learning chat":
+        title = conversation_title(question)
+        st.session_state.general_conversation_title = title
+    user_message = {"role": "user", "content": question}
+    messages.append(user_message)
+    save_message(user_id, conversation_id, title, kind, user_message)
+    with st.chat_message("user"):
+        st.markdown(question)
+    with st.chat_message("assistant"):
+        try:
+            with st.spinner("Learning assistant is thinking…"):
+                answer = get_learning_response(
+                    question,
+                    learning_context=learning_context,
+                    chat_history=langchain_history(messages[:-1]),
+                )
+            st.markdown(answer)
+        except Exception as error:
+            answer = f"I couldn't answer right now: {error}"
+            st.error(answer)
+    assistant_message = {"role": "assistant", "content": answer}
+    messages.append(assistant_message)
+    save_message(user_id, conversation_id, title, kind, assistant_message)
 
 
 def course_chat(course, user_name):
@@ -315,7 +429,7 @@ def render_course_items(course, user_name):
                     st.markdown(item["content"])
 
 
-def course_tracker(user_name):
+def course_tracker(user_name, show_saved_chats=True):
     st.markdown("### Course Tracker")
     st.caption("Your personal learning paths")
 
@@ -327,14 +441,15 @@ def course_tracker(user_name):
             with st.spinner("Building your course with videos, blogs and cheat sheets…"):
                 created = create_course(user_name, topic)
             st.session_state.active_course_id = created["id"]
-            st.session_state.workspace_mode = "AI Course Coach"
+            st.session_state.workspace_mode = "My Courses"
             st.success("Course created")
             st.rerun()
         except Exception as error:
             st.error(f"Course could not be created: {error}")
 
-    st.markdown('<div class="resource-label">Saved chats</div>', unsafe_allow_html=True)
-    if mongo_history_enabled():
+    if show_saved_chats:
+        st.markdown('<div class="resource-label">Saved chats</div>', unsafe_allow_html=True)
+    if show_saved_chats and mongo_history_enabled():
         conversations = list_conversations(normalise_user_id(user_name))
         if conversations:
             for conversation in conversations:
@@ -344,17 +459,11 @@ def course_tracker(user_name):
                     help=conversation.get("preview") or "Open saved conversation",
                     use_container_width=True,
                 ):
-                    if conversation.get("kind") == "biology":
-                        st.session_state.workspace_mode = "Biology Textbook"
-                    else:
-                        course_id = conversation.get("course_id")
-                        if course_id is not None:
-                            st.session_state.active_course_id = int(course_id)
-                        st.session_state.workspace_mode = "AI Course Coach"
+                    open_saved_conversation(conversation)
                     st.rerun()
         else:
             st.caption("Your conversations will appear here after the first message.")
-    else:
+    elif show_saved_chats:
         st.caption("Add MONGODB_URI on Render to save chat history permanently.")
 
     courses = list_courses(user_name)
@@ -376,7 +485,7 @@ def course_tracker(user_name):
             use_container_width=True,
         ):
             st.session_state.active_course_id = course["id"]
-            st.session_state.workspace_mode = "AI Course Coach"
+            st.session_state.workspace_mode = "My Courses"
             st.rerun()
 
     course = get_course(active_id, user_name)
@@ -424,49 +533,147 @@ def course_tracker(user_name):
     return course
 
 
+def start_new_chat():
+    st.session_state.workspace_mode = "General Learning"
+    st.session_state.general_conversation_id = f"general-{uuid4().hex}"
+    st.session_state.general_conversation_title = "New learning chat"
+
+
+def open_saved_conversation(conversation):
+    kind = conversation.get("kind", "general")
+    if kind == "biology":
+        st.session_state.workspace_mode = "School"
+        st.session_state.school_grade = "12"
+        st.session_state.school_subject = "Biology"
+    elif kind.startswith("school:"):
+        _, grade, subject = (kind.split(":", 2) + ["", ""])[:3]
+        st.session_state.workspace_mode = "School"
+        st.session_state.school_grade = grade or "10"
+        st.session_state.school_subject = subject or "Mathematics"
+    elif kind == "course":
+        st.session_state.workspace_mode = "My Courses"
+        if conversation.get("course_id") is not None:
+            st.session_state.active_course_id = int(conversation["course_id"])
+    else:
+        st.session_state.workspace_mode = "General Learning"
+        st.session_state.general_conversation_id = conversation["conversation_id"]
+        st.session_state.general_conversation_title = conversation.get("title", "Learning chat")
+
+
+def render_sidebar(user_name):
+    if st.button("＋  New learning chat", use_container_width=True, type="primary"):
+        start_new_chat()
+        st.rerun()
+
+    st.markdown('<div class="sidebar-section">Learn</div>', unsafe_allow_html=True)
+    navigation = [
+        ("◈  General Learning", "General Learning"),
+        ("▣  School Batches", "School"),
+        ("◫  My Courses", "My Courses"),
+    ]
+    for label, destination in navigation:
+        if st.button(label, key=f"nav_{destination}", use_container_width=True):
+            st.session_state.workspace_mode = destination
+            st.rerun()
+
+    st.markdown('<div class="sidebar-section">Saved chats</div>', unsafe_allow_html=True)
+    if mongo_history_enabled():
+        conversations = list_conversations(normalise_user_id(user_name), limit=10)
+        if conversations:
+            for conversation in conversations:
+                label = conversation.get("title", "Untitled chat")
+                if st.button(
+                    f"○  {label}",
+                    key=f"sidebar_chat_{conversation['conversation_id']}",
+                    help=conversation.get("preview") or "Open conversation",
+                    use_container_width=True,
+                ):
+                    open_saved_conversation(conversation)
+                    st.rerun()
+        else:
+            st.caption("Your chats will appear here.")
+    else:
+        st.caption("MongoDB is required for saved chats.")
+
+    courses = list_courses(user_name)
+    if courses:
+        st.markdown('<div class="sidebar-section">Your courses</div>', unsafe_allow_html=True)
+        for course in courses[:8]:
+            if st.button(
+                f"○  {course['topic']} · {course['progress']}%",
+                key=f"sidebar_course_{course['id']}",
+                use_container_width=True,
+            ):
+                st.session_state.active_course_id = course["id"]
+                st.session_state.workspace_mode = "My Courses"
+                st.rerun()
+
+
+def school_workspace(user_name):
+    st.markdown(
+        '<div class="workspace-head"><div class="eyebrow">School batches</div>'
+        '<h1>Choose your classroom</h1></div>',
+        unsafe_allow_html=True,
+    )
+    grade = st.segmented_control(
+        "Class",
+        ["10", "12"],
+        key="school_grade",
+        format_func=lambda value: f"Class {value}",
+    ) or "10"
+    subjects = ["Mathematics", "Physics", "Chemistry", "Biology"]
+    subject = st.segmented_control(
+        "Subject",
+        subjects,
+        key="school_subject",
+    ) or "Mathematics"
+    st.divider()
+    if grade == "12" and subject == "Biology":
+        biology_library(user_name)
+    else:
+        general_learning_chat(user_name, grade=grade, subject=subject)
+
+
+def courses_workspace(user_name):
+    st.markdown(
+        '<div class="workspace-head"><div class="eyebrow">Personal learning paths</div>'
+        '<h1>My courses</h1></div>',
+        unsafe_allow_html=True,
+    )
+    tracker_tab, coach_tab = st.tabs(["Progress & project", "AI course coach"])
+    with tracker_tab:
+        active_course = course_tracker(user_name, show_saved_chats=False)
+    with coach_tab:
+        active_id = st.session_state.get("active_course_id")
+        course = get_course(active_id, user_name) if active_id else active_course
+        course_chat(course, user_name)
+
+
 def main():
     inject_styles()
     initialise_database()
+    st.session_state.setdefault("workspace_mode", "General Learning")
+    st.session_state.setdefault("school_grade", "10")
+    st.session_state.setdefault("school_subject", "Mathematics")
 
-    header_left, header_right = st.columns([3, 1])
-    with header_left:
-        st.markdown('<div class="learn-brand">Learn<span>.ai</span></div>', unsafe_allow_html=True)
-        st.caption("Turn any topic into a guided course, measurable progress, and a real project.")
-    with header_right:
+    with st.sidebar:
+        st.markdown('<div class="sidebar-brand">Learn<span>.ai</span></div>', unsafe_allow_html=True)
         user_name = st.text_input(
             "Learner ID",
             value=st.session_state.get("learner_name", "Learner"),
             placeholder="e.g. lovely-gupta",
-            help="Use the same unique ID to reopen your courses and saved chats.",
+            help="Use the same unique ID to reopen courses and saved chats.",
         )
         st.session_state.learner_name = user_name or "Learner"
+        render_sidebar(st.session_state.learner_name)
 
-    st.divider()
-    content_column, tracker_column = st.columns([2.15, 1], gap="large")
-
-    with tracker_column:
-        with st.container(height=760, border=True):
-            active_course = course_tracker(st.session_state.learner_name)
-
-    with content_column:
-        if "workspace_mode" not in st.session_state:
-            st.session_state.workspace_mode = "AI Course Coach"
-        mode = st.segmented_control(
-            "Workspace",
-            ["AI Course Coach", "Biology Textbook"],
-            key="workspace_mode",
-            label_visibility="collapsed",
-        )
-        if mode == "Biology Textbook":
-            biology_library(st.session_state.learner_name)
-        else:
-            active_id = st.session_state.get("active_course_id")
-            course = (
-                get_course(active_id, st.session_state.learner_name)
-                if active_id
-                else active_course
-            )
-            course_chat(course, st.session_state.learner_name)
+    mode = st.session_state.workspace_mode
+    if mode == "School":
+        school_workspace(st.session_state.learner_name)
+    elif mode == "My Courses":
+        courses_workspace(st.session_state.learner_name)
+    else:
+        general_learning_chat(st.session_state.learner_name)
 
 
 if __name__ == "__main__":
